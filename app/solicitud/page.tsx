@@ -29,6 +29,7 @@ export default function SolicitudPage() {
   });
   const [enviando, setEnviando] = useState(false);
   const [mensaje, setMensaje] = useState("");
+  const [solicitudEnviada, setSolicitudEnviada] = useState(false);
 
  function seleccionarArchivo(nombre: string, archivo: File | null) {
   if (archivo) {
@@ -192,9 +193,7 @@ async function enviarSolicitud(e: FormEvent<HTMLFormElement>) {
       selfie_dni: null,
     });
 
-    setMensaje(
-      "¡Solicitud enviada correctamente! Nos comunicaremos con vos."
-    );
+   setSolicitudEnviada(true);
   } catch (error) {
     console.error("Error al enviar solicitud:", error);
 
@@ -215,6 +214,76 @@ async function enviarSolicitud(e: FormEvent<HTMLFormElement>) {
     { id: "comprobante_domicilio", label: "Factura de servicio o constancia de domicilio" },
     { id: "selfie_dni", label: "Selfie sosteniendo el DNI" },
   ];
+    if (solicitudEnviada) {
+    const mensajeWhatsApp = encodeURIComponent(
+      "Hola, acabo de enviar una solicitud de servicio desde la página de CVC Digital. Quisiera consultar sobre el seguimiento de mi trámite."
+    );
+
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-slate-100 px-4 py-10">
+        <div className="w-full max-w-lg rounded-3xl bg-white p-8 text-center shadow-xl sm:p-10">
+          <div className="mx-auto flex h-24 w-24 items-center justify-center rounded-full bg-green-100">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              className="h-14 w-14 text-green-600"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="m5 12 4 4L19 6"
+              />
+            </svg>
+          </div>
+
+          <p className="mt-6 font-bold tracking-widest text-orange-600">
+            CVC DIGITAL
+          </p>
+
+          <h1 className="mt-3 text-3xl font-black text-slate-900">
+            ¡Solicitud enviada!
+          </h1>
+
+          <p className="mt-4 leading-relaxed text-slate-600">
+            Recibimos correctamente tus datos y documentación. Nuestro equipo
+            revisará tu solicitud y se pondrá en contacto con vos.
+          </p>
+
+          <a
+            href={`https://wa.me/5493704076291?text=${mensajeWhatsApp}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-8 flex w-full items-center justify-center gap-3 rounded-xl bg-[#25D366] px-5 py-4 font-bold text-white transition hover:bg-[#1ebe5d]"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              fill="currentColor"
+              className="h-6 w-6"
+            >
+              <path d="M20.52 3.48A11.86 11.86 0 0 0 12.08 0C5.52 0 .18 5.34.18 11.9c0 2.1.55 4.15 1.6 5.96L.08 24l6.3-1.65a11.9 11.9 0 0 0 5.7 1.45h.01c6.56 0 11.9-5.34 11.9-11.9 0-3.18-1.24-6.17-3.47-8.42ZM12.09 21.8h-.01a9.9 9.9 0 0 1-5.04-1.38l-.36-.21-3.74.98 1-3.65-.23-.37a9.86 9.86 0 0 1-1.52-5.27c0-5.46 4.45-9.9 9.9-9.9a9.83 9.83 0 0 1 7.01 2.9 9.84 9.84 0 0 1 2.9 7.02c0 5.46-4.44 9.9-9.91 9.9Zm5.43-7.42c-.3-.15-1.77-.87-2.05-.97-.28-.1-.48-.15-.68.15-.2.3-.78.97-.96 1.17-.18.2-.35.22-.65.07-.3-.15-1.26-.46-2.4-1.47-.88-.78-1.48-1.74-1.65-2.04-.17-.3-.02-.46.13-.61.13-.13.3-.35.45-.52.15-.17.2-.3.3-.5.1-.2.05-.38-.02-.53-.08-.15-.68-1.63-.93-2.23-.24-.58-.49-.5-.68-.51h-.58c-.2 0-.53.07-.81.38-.28.3-1.06 1.03-1.06 2.5s1.09 2.9 1.24 3.1c.15.2 2.15 3.28 5.2 4.6.73.32 1.3.51 1.74.65.73.23 1.4.2 1.93.12.59-.09 1.77-.72 2.02-1.42.25-.7.25-1.3.18-1.42-.08-.12-.28-.2-.58-.35Z" />
+            </svg>
+            Continuar por WhatsApp
+          </a>
+
+          <p className="mt-4 text-xs text-slate-500">
+            Se abrirá WhatsApp con un mensaje preparado. Podrás revisarlo y
+            enviarlo.
+          </p>
+
+          <a
+            href="/"
+            className="mt-6 inline-block font-semibold text-orange-600 hover:text-orange-700"
+          >
+            Volver al inicio
+          </a>
+        </div>
+      </main>
+    );
+  }
 
   return (
     <main className="min-h-screen bg-slate-100 px-4 py-10">

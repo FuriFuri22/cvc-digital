@@ -274,45 +274,46 @@ export async function POST(request: Request) {
       rutas[documento.nombre] = documento.path;
     }
 
-    const { data, error } = await supabaseAdmin
-      .from("solicitudes")
-      .insert({
-        id: solicitudId,
-        tipo_cliente: datos.tipo_cliente,
-        numero_cliente: datos.numero_cliente || null,
-        nombre: datos.nombre,
-        apellido: datos.apellido,
-        razon_social: datos.razon_social || null,
-        tipo_documento: datos.tipo_documento,
-        numero_documento: datos.numero_documento,
-        fecha_nacimiento: datos.fecha_nacimiento,
-        email: datos.email || null,
-        calle: datos.calle,
-        numero_domicilio: datos.numero_domicilio,
-        barrio: datos.barrio,
-        localidad: datos.localidad,
-        provincia: datos.provincia,
-        codigo_postal: datos.codigo_postal,
-        posee_linea_fija: datos.posee_linea_fija === "true",
-        telefono: datos.telefono,
-        telefono_alternativo: datos.telefono_alternativo || null,
-        servicio: datos.servicio,
-        tipo_inmueble: datos.tipo_inmueble,
-        observaciones: datos.observaciones || null,
-        ...rutas,
-      })
-      .select("id")
-      .single();
+        const { data, error } = await supabaseAdmin.rpc(
+      "registrar_solicitud_con_limite",
+      {
+        p_solicitud: {
+          id: solicitudId,
+          tipo_cliente: datos.tipo_cliente,
+          numero_cliente: datos.numero_cliente || null,
+          nombre: datos.nombre,
+          apellido: datos.apellido,
+          razon_social: datos.razon_social || null,
+          tipo_documento: datos.tipo_documento,
+          numero_documento: datos.numero_documento,
+          fecha_nacimiento: datos.fecha_nacimiento,
+          email: datos.email || null,
+          calle: datos.calle,
+          numero_domicilio: datos.numero_domicilio,
+          barrio: datos.barrio,
+          localidad: datos.localidad,
+          provincia: datos.provincia,
+          codigo_postal: datos.codigo_postal,
+          posee_linea_fija: datos.posee_linea_fija === "true",
+          telefono: datos.telefono,
+          telefono_alternativo: datos.telefono_alternativo || null,
+          servicio: datos.servicio,
+          tipo_inmueble: datos.tipo_inmueble,
+          observaciones: datos.observaciones || null,
+          ...rutas,
+        },
+      }
+    );
 
     if (error) {
-      console.error("Error al insertar solicitud:", error);
-      throw new Error("No se pudo registrar la solicitud.");
+      console.error("Error al registrar solicitud:", error);
+      throw new Error(error.message);
     }
 
     return NextResponse.json(
       {
         mensaje: "Solicitud recibida correctamente.",
-        id: data.id,
+        id: data,
       },
       { status: 201 }
     );
@@ -332,14 +333,19 @@ export async function POST(request: Request) {
       }
     }
 
+       const limiteAlcanzado =
+      error instanceof Error &&
+      error.message.includes("LIMITE_MENSUAL");
+
     return NextResponse.json(
       {
-        error:
-          error instanceof Error
+        error: limiteAlcanzado
+          ? "Este DNI ya alcanzó el límite de 5 solicitudes durante este mes. Podés volver a intentarlo el próximo mes."
+          : error instanceof Error
             ? error.message
             : "No se pudo procesar la solicitud.",
       },
-      { status: 500 }
+      { status: limiteAlcanzado ? 429 : 500 }
     );
   }
 }
