@@ -3,8 +3,6 @@ import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 
 const BUCKET = "documentos-clientes";
-const MAX_FILE_SIZE = 5 * 1024 * 1024;
-const MAX_REQUEST_SIZE = 29 * 1024 * 1024;
 
 const DOCUMENTOS = [
   "dni_frente",
@@ -39,64 +37,40 @@ const CAMPOS = [
 
 type Documento = {
   nombre: string;
-  archivo: string;
-  tipo: string;
-  base64: string;
+  path: string;
 };
 
 function esObjeto(valor: unknown): valor is Record<string, unknown> {
   return typeof valor === "object" && valor !== null && !Array.isArray(valor);
 }
 
-function validarImagen(bytes: Buffer, tipo: string) {
-  if (tipo === "image/jpeg") {
-    return (
-      bytes.length >= 3 &&
-      bytes[0] === 0xff &&
-      bytes[1] === 0xd8 &&
-      bytes[2] === 0xff
-    );
-  }
-
-  if (tipo === "image/png") {
-    return (
-      bytes.length >= 8 &&
-      bytes[0] === 0x89 &&
-      bytes[1] === 0x50 &&
-      bytes[2] === 0x4e &&
-      bytes[3] === 0x47
-    );
-  }
-
-  if (tipo === "image/webp") {
-    return (
-      bytes.length >= 12 &&
-      bytes.toString("ascii", 0, 4) === "RIFF" &&
-      bytes.toString("ascii", 8, 12) === "WEBP"
-    );
-  }
-
-  return false;
-}
-
 export async function POST(request: Request) {
   const archivosSubidos: string[] = [];
 
   try {
-    const longitud = Number(request.headers.get("content-length") || 0);
+    const cuerpo: unknown = await request.json();
 
-    if (longitud > MAX_REQUEST_SIZE) {
+    if (
+      !esObjeto(cuerpo) ||
+      !esObjeto(cuerpo.datos) ||
+      !Array.isArray(cuerpo.documentos)
+    ) {
       return NextResponse.json(
-        { error: "El envío supera el tamaño permitido." },
-        { status: 413 }
+        { error: "El formato de la solicitud no es válido." },
+        { status: 400 }
       );
     }
 
-    const cuerpo: unknown = await request.json();
+    const solicitudId =
+      typeof cuerpo.solicitudId === "string" ? cuerpo.solicitudId : "";
 
-    if (!esObjeto(cuerpo) || !esObjeto(cuerpo.datos) || !Array.isArray(cuerpo.documentos)) {
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        solicitudId
+      )
+    ) {
       return NextResponse.json(
-        { error: "El formato de la solicitud no es válido." },
+        { error: "El identificador de solicitud no es válido." },
         { status: 400 }
       );
     }
@@ -222,22 +196,12 @@ export async function POST(request: Request) {
     const documentosPorNombre = new Map<string, Documento>();
 
     for (const elemento of cuerpo.documentos) {
-      if (!esObjeto(elemento)) {
-        return NextResponse.json(
-          { error: "Hay un documento inválido." },
-          { status: 400 }
-        );
-      }
-
-      const { nombre, archivo, tipo, base64 } = elemento;
-
       if (
-        typeof nombre !== "string" ||
-        typeof archivo !== "string" ||
-        typeof tipo !== "string" ||
-        typeof base64 !== "string" ||
-        !DOCUMENTOS.includes(nombre as (typeof DOCUMENTOS)[number]) ||
-        documentosPorNombre.has(nombre)
+        !esObjeto(elemento) ||
+        typeof elemento.nombre !== "string" ||
+        typeof elemento.path !== "string" ||
+        !DOCUMENTOS.includes(elemento.nombre as (typeof DOCUMENTOS)[number]) ||
+        documentosPorNombre.has(elemento.nombre)
       ) {
         return NextResponse.json(
           { error: "Los documentos enviados no son válidos." },
@@ -245,80 +209,69 @@ export async function POST(request: Request) {
         );
       }
 
-      if (
-        base64.length === 0 ||
-        base64.length > Math.ceil(MAX_FILE_SIZE * 4 / 3) + 4 ||
-        !/^[A-Za-z0-9+/]*={0,2}$/.test(base64)
-      ) {
+      const extension = elemento.path.split(".").pop();
+
+      if (!["jpg", "png", "webp"].includes(extension ?? "")) {
         return NextResponse.json(
-          { error: `El archivo ${nombre} supera el tamaño permitido o es inválido.` },
+          { error: "La extensión de un documento no es válida." },
           { status: 400 }
         );
       }
 
-      const bytes = Buffer.from(base64, "base64");
+      const rutaEsperada = `${solicitudId}/${elemento.nombre}.${extension}`;
 
-      if (bytes.length === 0 || bytes.length > MAX_FILE_SIZE) {
+      if (elemento.path !== rutaEsperada) {
         return NextResponse.json(
-          { error: `El archivo ${nombre} supera los 5 MB.` },
+          { error: "La ruta de un documento no es válida." },
           { status: 400 }
         );
       }
 
-      if (!validarImagen(bytes, tipo)) {
-        return NextResponse.json(
-          { error: `El archivo ${nombre} no es una imagen válida.` },
-          { status: 400 }
-        );
-      }
-
-      documentosPorNombre.set(nombre, {
-        nombre,
-        archivo,
-        tipo,
-        base64,
+      documentosPorNombre.set(elemento.nombre, {
+        nombre: elemento.nombre,
+        path: elemento.path,
       });
+
+      archivosSubidos.push(elemento.path);
     }
 
-    for (const campo of DOCUMENTOS) {
-      if (!documentosPorNombre.has(campo)) {
-        return NextResponse.json(
-          { error: `Falta el documento: ${campo}` },
-          { status: 400 }
+    if (
+      documentosPorNombre.size !== DOCUMENTOS.length ||
+      !DOCUMENTOS.every((nombre) => documentosPorNombre.has(nombre))
+    ) {
+      return NextResponse.json(
+        { error: "Debés adjuntar los cuatro documentos." },
+        { status: 400 }
+      );
+    }
+
+    const { data: archivosGuardados, error: errorArchivos } =
+      await supabaseAdmin.storage
+        .from(BUCKET)
+        .list(solicitudId);
+
+    if (errorArchivos) {
+      throw new Error("No se pudo verificar la documentación.");
+    }
+
+    for (const documento of documentosPorNombre.values()) {
+      const nombreArchivo = documento.path.split("/").pop();
+
+      const existe = archivosGuardados?.some(
+        (archivo) => archivo.name === nombreArchivo
+      );
+
+      if (!existe) {
+        throw new Error(
+          `No se encontró el documento ${documento.nombre}.`
         );
       }
     }
 
-    const solicitudId = crypto.randomUUID();
     const rutas: Record<string, string> = {};
 
-    for (const campo of DOCUMENTOS) {
-      const documento = documentosPorNombre.get(campo)!;
-      const bytes = Buffer.from(documento.base64, "base64");
-
-      const extension =
-        documento.tipo === "image/png"
-          ? "png"
-          : documento.tipo === "image/webp"
-            ? "webp"
-            : "jpg";
-
-      const ruta = `${solicitudId}/${campo}.${extension}`;
-
-      const { error } = await supabaseAdmin.storage
-        .from(BUCKET)
-        .upload(ruta, bytes, {
-          contentType: documento.tipo,
-          upsert: false,
-        });
-
-      if (error) {
-        console.error("Error al subir documento:", error);
-        throw new Error("No se pudo guardar la documentación.");
-      }
-
-      archivosSubidos.push(ruta);
-      rutas[campo] = ruta;
+    for (const documento of documentosPorNombre.values()) {
+      rutas[documento.nombre] = documento.path;
     }
 
     const { data, error } = await supabaseAdmin
@@ -372,12 +325,20 @@ export async function POST(request: Request) {
         .remove(archivosSubidos);
 
       if (errorLimpieza) {
-        console.error("No se pudieron eliminar los archivos temporales:", errorLimpieza);
+        console.error(
+          "No se pudieron eliminar los archivos temporales:",
+          errorLimpieza
+        );
       }
     }
 
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "No se pudo procesar la solicitud." },
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : "No se pudo procesar la solicitud.",
+      },
       { status: 500 }
     );
   }

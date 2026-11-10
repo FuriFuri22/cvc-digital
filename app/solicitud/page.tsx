@@ -2,7 +2,12 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
+import { createClient } from "@supabase/supabase-js";
 
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
 const condiciones = `Por la presente, el que suscribe, en adelante, el CLIENTE arriba mencionado, solicita a C & R S.R.L. la instalación domiciliaria y posterior servicio de televisión y audio por cable en los modos y formas obrantes en el F01, expuesto en el anverso del presente, que declara conocer y del cual recibe copia fiel.
 
 El CLIENTE se compromete a pagar el importe mensual pactado al momento de la suscripción del presente, en concepto de ABONO DE CABLE Y/O USO DE LA LÍNEA para la prestación del servicio de internet por parte de nuestras empresas co-contratantes, por adelantado (del 01 al 10 de cada mes), correspondiente a la tarifa vigente o al precio promocional pactado al momento de la suscripción del presente.
@@ -25,108 +30,184 @@ export default function SolicitudPage() {
   const [enviando, setEnviando] = useState(false);
   const [mensaje, setMensaje] = useState("");
 
-  function seleccionarArchivo(nombre: string, archivo: File | null) {
-    setArchivos((actuales) => ({
-      ...actuales,
-      [nombre]: archivo,
-    }));
+ function seleccionarArchivo(nombre: string, archivo: File | null) {
+  if (archivo) {
+    const tiposPermitidos = ["image/jpeg", "image/png", "image/webp"];
+
+    if (!tiposPermitidos.includes(archivo.type)) {
+      setMensaje("El archivo debe ser JPG, PNG o WEBP.");
+      return;
+    }
+
+    if (archivo.size > 5 * 1024 * 1024) {
+      setMensaje("Cada imagen puede pesar como máximo 5 MB.");
+      return;
+    }
   }
 
-  async function archivoABase64(archivo: File) {
-  return new Promise<string>((resolve, reject) => {
-    const lector = new FileReader();
+  setMensaje("");
 
-    lector.onload = () => {
-      const resultado = lector.result as string;
-      resolve(resultado.split(",")[1]);
-    };
-
-    lector.onerror = () => reject(new Error("No se pudo leer una imagen."));
-
-    lector.readAsDataURL(archivo);
-  });
+  setArchivos((actuales) => ({
+    ...actuales,
+    [nombre]: archivo,
+  }));
 }
 
-  async function enviarSolicitud(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    setMensaje("");
+  
 
-    if (!acepta) {
-      setMensaje("Debés aceptar las condiciones.");
-      return;
-    }
+  
+async function enviarSolicitud(e: FormEvent<HTMLFormElement>) {
+  e.preventDefault();
+  setMensaje("");
 
-    if (Object.values(archivos).some((archivo) => !archivo)) {
-      setMensaje("Debés adjuntar los cuatro documentos.");
-      return;
-    }
+  if (!acepta) {
+    setMensaje("Debés aceptar las condiciones.");
+    return;
+  }
 
-    const formulario = e.currentTarget;
-const formData = new FormData(formulario);
+  if (Object.values(archivos).some((archivo) => !archivo)) {
+    setMensaje("Debés adjuntar los cuatro documentos.");
+    return;
+  }
 
-setEnviando(true);
+  const formulario = e.currentTarget;
+  const formData = new FormData(formulario);
 
-try {
-  const documentos = await Promise.all(
-    Object.entries(archivos).map(async ([nombre, archivo]) => {
-      if (!archivo) throw new Error("Falta adjuntar un documento.");
+  setEnviando(true);
 
-      return {
-        nombre,
-        archivo: archivo.name,
-        tipo: archivo.type,
-        base64: await archivoABase64(archivo),
-      };
-    })
-  );
+  try {
+    // 1. Solicitar las URLs firmadas para subir los documentos.
+    const documentosParaPreparar = Object.entries(archivos).map(
+      ([nombre, archivo]) => {
+        if (!archivo) {
+          throw new Error("Falta adjuntar un documento.");
+        }
 
-  const datos = Object.fromEntries(formData.entries());
+        return {
+          nombre,
+          tipo: archivo.type,
+        };
+      }
+    );
 
-  const respuesta = await fetch("/api/solicitudes", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json",
-    },
-    body: JSON.stringify({
-      datos: {
-        ...datos,
-        tipo_cliente: tipoCliente,
-        servicio,
-        posee_linea_fija: poseeLinea,
-        acepta_condiciones: String(acepta),
+    const respuestaPreparar = await fetch("/api/solicitudes/preparar", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
       },
-      documentos,
-    }),
-  });
+      body: JSON.stringify({
+        documentos: documentosParaPreparar,
+      }),
+    });
 
-  const resultado = await respuesta.json();
+    const resultadoPreparar = await respuestaPreparar.json();
 
-  if (!respuesta.ok) {
-    throw new Error(resultado.error || "No se pudo enviar la solicitud.");
+    if (!respuestaPreparar.ok) {
+      throw new Error(
+        resultadoPreparar.error || "No se pudo preparar la documentación."
+      );
+    }
+
+    // 2. Subir cada imagen directamente a Supabase.
+    const documentosSubidos = [];
+
+    for (const documento of resultadoPreparar.documentos) {
+      const archivo = archivos[documento.nombre];
+
+      if (!archivo) {
+        throw new Error("No se encontró uno de los documentos.");
+      }
+
+      const { error } = await supabase.storage
+        .from("documentos-clientes")
+        .uploadToSignedUrl(
+          documento.path,
+          documento.token,
+          archivo,
+          {
+            contentType: archivo.type,
+            upsert: false,
+          }
+        );
+
+      if (error) {
+        console.error("Error al subir documento:", error);
+        throw new Error(
+          `No se pudo subir el documento: ${documento.nombre}.`
+        );
+      }
+
+      documentosSubidos.push({
+        nombre: documento.nombre,
+        path: documento.path,
+      });
+    }
+
+    // 3. Preparar los datos del formulario.
+    const datos = Object.fromEntries(
+      [...formData.entries()].filter(
+        ([, valor]) => typeof valor === "string"
+      )
+    );
+
+    // 4. Registrar la solicitud y sus rutas en la base de datos.
+    const respuesta = await fetch("/api/solicitudes", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({
+        solicitudId: resultadoPreparar.solicitudId,
+        datos: {
+          ...datos,
+          tipo_cliente: tipoCliente,
+          servicio,
+          posee_linea_fija: poseeLinea,
+          acepta_condiciones: String(acepta),
+        },
+        documentos: documentosSubidos,
+      }),
+    });
+
+    const resultado = await respuesta.json();
+
+    if (!respuesta.ok) {
+      throw new Error(
+        resultado.error || "No se pudo enviar la solicitud."
+      );
+    }
+
+    // 5. Limpiar el formulario.
+    formulario.reset();
+    setTipoCliente("nuevo");
+    setServicio("cvc_basico");
+    setPoseeLinea("false");
+    setAcepta(false);
+
+    setArchivos({
+      dni_frente: null,
+      dni_dorso: null,
+      comprobante_domicilio: null,
+      selfie_dni: null,
+    });
+
+    setMensaje(
+      "¡Solicitud enviada correctamente! Nos comunicaremos con vos."
+    );
+  } catch (error) {
+    console.error("Error al enviar solicitud:", error);
+
+    setMensaje(
+      error instanceof Error
+        ? error.message
+        : "Ocurrió un error al enviar."
+    );
+  } finally {
+    setEnviando(false);
   }
-
-  formulario.reset();
-  setTipoCliente("nuevo");
-  setServicio("cvc_basico");
-  setPoseeLinea("false");
-  setAcepta(false);
-  setArchivos({
-    dni_frente: null,
-    dni_dorso: null,
-    comprobante_domicilio: null,
-    selfie_dni: null,
-  });
-
-  setMensaje("¡Solicitud enviada correctamente! Nos comunicaremos con vos.");
-} catch (error) {
-  setMensaje(
-    error instanceof Error ? error.message : "Ocurrió un error al enviar."
-  );
-} finally {
-  setEnviando(false);
 }
-  }
+
 
   const camposArchivo = [
     { id: "dni_frente", label: "DNI frente" },
